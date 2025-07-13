@@ -1,9 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import Query
-
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+import base64
+import secrets
 from backend.schemas.user import UserCreate, UserRead
 from backend.schemas.token import Token
 from backend.models.user import User
@@ -17,6 +20,7 @@ from backend.auth import SECRET_KEY, ALGORITHM
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+nonce_store = {}
 
 def send_confirmation_email(to_email: str, token: str):
     link = f"http://localhost:3000/confirm-email/{token}"
@@ -85,6 +89,30 @@ async def confirm_email(token: str, db: AsyncSession = Depends(get_async_db)):
     return {"message": "Email confirmat cu succes!"}
 
 
+
+def verify_signature(public_key_pem: str, message: str, signature_b64: str) -> bool:
+    try:
+        public_key = serialization.load_pem_public_key(public_key_pem.encode())
+        signature = base64.b64decode(signature_b64)
+        public_key.verify(
+            signature,
+            message.encode(),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+        return True
+    except Exception:
+        return False
+
+
+@router.post("/get-nonce")
+async def get_nonce(data: dict):
+    username = data["username"]
+    nonce = secrets.token_hex(16)
+    nonce_store[username] = nonce
+    return {"nonce": nonce}
+
+
 @router.post("/login", response_model=Token)
 async def login(user: UserCreate, db: AsyncSession = Depends(get_async_db)):
     result = await db.execute(
@@ -93,14 +121,23 @@ async def login(user: UserCreate, db: AsyncSession = Depends(get_async_db)):
         )
     )
     db_user = result.scalar_one_or_none()
+
     if not db_user or not verify_password(user.password, db_user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if not db_user.email_confirmed:
         raise HTTPException(status_code=403, detail="Email need confirmation.")
 
+    nonce = nonce_store.get(db_user.username)
+    if not nonce:
+        raise HTTPException(status_code=400, detail="Nonce missing")
+
+    if not verify_signature(db_user.public_key, nonce, user.signature):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
     token = create_access_token(data={"sub": db_user.username})
     return {"access_token": token, "token_type": "bearer"}
+
 
 @router.get("/email-confirmed", response_model=bool)
 async def is_email_confirmed(username: str = Query(...), db: AsyncSession = Depends(get_async_db)):

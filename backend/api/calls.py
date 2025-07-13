@@ -47,8 +47,21 @@ async def accept_call(
     db: AsyncSession = Depends(get_async_db),
     user: User = Depends(get_current_user)
 ):
+    q = await db.execute(
+        select(Participant).where(
+            Participant.call_id == call_id,
+            Participant.user_id == user.username
+        )
+    )
+    existing = q.scalar_one_or_none()
+    if not existing:
+        raise HTTPException(status_code=403, detail="Nu ai fost invitat la acest apel")
+
     await db.execute(
-        delete(Participant).where(Participant.call_id == call_id, Participant.user_id == user.username)
+        delete(Participant).where(
+            Participant.call_id == call_id,
+            Participant.user_id == user.username
+        )
     )
     await db.commit()
     return {"detail": f"{user.username} accepted {call_id}"}

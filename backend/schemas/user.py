@@ -8,6 +8,7 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
+    signature: Optional[str] = None
 
 class StatusUpdateRequest(BaseModel):
     status: str

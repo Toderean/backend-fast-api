@@ -32,8 +32,12 @@ async def create_group(
     await db.commit()
     await db.refresh(member)
 
-    return group
-
+    return GroupRead(
+        id=group.id,
+        name=group.name,
+        creator_id=group.creator_id,
+        creator_username=current_user.username
+    )
 
 @router.get("/", response_model=List[GroupRead])
 async def get_my_groups(db: AsyncSession = Depends(get_async_db), current_user: User = Depends(get_current_user)):
@@ -78,11 +82,25 @@ async def invite_user(
     if existing:
         raise HTTPException(status_code=400, detail="Utilizatorul este deja în grup sau a fost invitat")
 
+    user_result = await db.execute(select(User).where(User.id == data.user_id))
+    user = user_result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilizatorul nu există")
+
     member = GroupMember(group_id=group_id, user_id=data.user_id, status="invited")
     db.add(member)
     await db.commit()
     await db.refresh(member)
-    return member
+
+    return GroupMemberRead(
+        id=member.id,
+        group_id=member.group_id,
+        user_id=member.user_id,
+        status=member.status,
+        joined_at=member.joined_at,
+        group_name=group.name,
+        username=user.username,
+    )
 
 
 @router.post("/{group_id}/accept", response_model=GroupMemberRead)
@@ -103,10 +121,24 @@ async def accept_invite(
     if member.status != "invited":
         raise HTTPException(status_code=400, detail="Nu poți accepta această invitație")
 
+    group_result = await db.execute(select(Group).where(Group.id == group_id))
+    group = group_result.scalar_one_or_none()
+    if not group:
+        raise HTTPException(status_code=404, detail="Grupul nu există")
+
     member.status = "joined"
     await db.commit()
     await db.refresh(member)
-    return member
+
+    return GroupMemberRead(
+        id=member.id,
+        group_id=member.group_id,
+        user_id=member.user_id,
+        status=member.status,
+        joined_at=member.joined_at,
+        group_name=group.name,
+        username=current_user.username
+    )
 
 
 @router.get("/{group_id}/members")
