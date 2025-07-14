@@ -87,6 +87,45 @@ async def get_unread_count(
 
     return {"unread_count": count}
 
+@router.get("/unread_users")
+async def get_unread_users(
+    for_user: str,
+    db: Session = Depends(get_async_db)
+):
+    stmt = select(User).where(User.username == for_user)
+    result = await db.execute(stmt)
+    current_user = result.scalars().first()
+    if not current_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    stmt = select(Message).where(
+        (Message.receiver_id == current_user.id) &
+        (Message.status == "sent")
+    )
+    result = await db.execute(stmt)
+    messages = result.scalars().all()
+
+    unread_by_user = {}
+    for msg in messages:
+        if msg.sender_id not in unread_by_user:
+            unread_by_user[msg.sender_id] = 1
+        else:
+            unread_by_user[msg.sender_id] += 1
+
+    sender_ids = list(unread_by_user.keys())
+    if not sender_ids:
+        return []
+
+    stmt = select(User).where(User.id.in_(sender_ids))
+    result = await db.execute(stmt)
+    senders = result.scalars().all()
+
+    return [
+        {"username": sender.username, "count": unread_by_user[sender.id]}
+        for sender in senders
+    ]
+
+
 @router.post("/mark_seen")
 async def mark_messages_seen(
     with_user: str,
